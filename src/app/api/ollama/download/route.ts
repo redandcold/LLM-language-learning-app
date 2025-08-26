@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { spawn } from 'child_process'
+import path from 'path'
 
 export async function POST(request: NextRequest) {
   try {
@@ -11,56 +13,51 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Ollama pull 명령어 실행 (스트리밍 활성화로 진행률 표시)
-    const response = await fetch('http://localhost:11434/api/pull', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    // 프로젝트 폴더의 ollama-models 경로 설정
+    const projectModelsPath = path.join(process.cwd(), 'ollama-models')
+    
+    // 환경 변수를 설정하고 ollama pull 명령어 실행
+    const pullProcess = spawn('ollama', ['pull', modelId], {
+      env: {
+        ...process.env,
+        OLLAMA_MODELS: projectModelsPath
       },
-      body: JSON.stringify({
-        name: modelId,
-        stream: true  // 스트리밍 활성화로 진행률 추적
-      }),
-      signal: AbortSignal.timeout(600000) // 10분 타임아웃
+      shell: true
     })
 
-    if (!response.ok) {
-      const errorData = await response.text()
-      throw new Error(`Ollama pull failed: ${errorData}`)
-    }
+    let output = ''
+    let errorOutput = ''
 
-    // 스트리밍 응답 처리
-    const reader = response.body?.getReader()
-    if (!reader) {
-      throw new Error('Failed to get response reader')
-    }
+    const pullPromise = new Promise<void>((resolve, reject) => {
+      pullProcess.stdout?.on('data', (data) => {
+        output += data.toString()
+        console.log('Ollama pull output:', data.toString())
+      })
 
-    let progress = 0
-    let status = 'downloading'
-    
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+      pullProcess.stderr?.on('data', (data) => {
+        errorOutput += data.toString()
+        console.error('Ollama pull error:', data.toString())
+      })
 
-        const chunk = new TextDecoder().decode(value)
-        const lines = chunk.split('\n').filter(line => line.trim())
-        
-        for (const line of lines) {
-          try {
-            const data = JSON.parse(line)
-            if (data.status === 'downloading' && data.completed && data.total) {
-              progress = Math.round((data.completed / data.total) * 100)
-            }
-            status = data.status || 'downloading'
-          } catch (e) {
-            // JSON 파싱 오류 무시
-          }
+      pullProcess.on('close', (code) => {
+        if (code === 0) {
+          resolve()
+        } else {
+          reject(new Error(`Ollama pull failed with code ${code}: ${errorOutput}`))
         }
-      }
-    } finally {
-      reader.releaseLock()
-    }
+      })
+
+      pullProcess.on('error', (error) => {
+        reject(new Error(`Failed to start ollama pull: ${error.message}`))
+      })
+    })
+
+    // 10분 타임아웃 설정
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Download timeout')), 600000)
+    })
+
+    await Promise.race([pullPromise, timeoutPromise])
     
     return NextResponse.json({ 
       success: true,

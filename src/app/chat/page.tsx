@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Send, ArrowLeft, Plus, Settings, X } from 'lucide-react'
+import { Send, ArrowLeft, Plus, Settings, X, ChevronDown } from 'lucide-react'
 import Link from 'next/link'
 
 interface Message {
@@ -35,6 +35,9 @@ export default function ChatPage() {
   const [modelSettings, setModelSettings] = useState<ModelSettings>({ modelType: 'openai', updatedAt: '' })
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
+  const [chatSettingsExpanded, setChatSettingsExpanded] = useState(true)
+  const [modelSettingsExpanded, setModelSettingsExpanded] = useState(true)
+  const [settingsError, setSettingsError] = useState<string | null>(null)
 
   useEffect(() => {
     loadModelSettings()
@@ -91,47 +94,68 @@ export default function ChatPage() {
 
   const loadModelSettings = async () => {
     try {
+      setSettingsError(null)
       const response = await fetch('/api/settings/model')
       if (response.ok) {
         const settings = await response.json()
         setModelSettings(settings)
         if (settings.modelType === 'local') {
-          loadAvailableModels()
+          await loadAvailableModels()
         }
+      } else {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
     } catch (error) {
       console.error('Failed to load model settings:', error)
+      setSettingsError('모델 설정을 불러오는데 실패했습니다.')
     }
   }
 
   const loadAvailableModels = async () => {
     setLoadingModels(true)
     try {
+      setSettingsError(null)
       const response = await fetch('/api/ollama/models')
       if (response.ok) {
         const data = await response.json()
-        setAvailableModels(data.models || [])
+        const modelNames = data.models?.map((model: any) => model.name || model.model || model) || []
+        setAvailableModels(modelNames)
+      } else {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
     } catch (error) {
       console.error('Failed to load models:', error)
+      setSettingsError('사용 가능한 모델을 불러오는데 실패했습니다.')
+    } finally {
+      setLoadingModels(false)
     }
-    setLoadingModels(false)
   }
 
-  const saveModelSettings = async (newSettings: Partial<ModelSettings>) => {
+  const saveModelSettings = async (settingsToSave?: Partial<ModelSettings>) => {
     try {
-      const updatedSettings = { ...modelSettings, ...newSettings, updatedAt: new Date().toISOString() }
+      setSettingsError(null)
+      const updatedSettings = { 
+        ...modelSettings, 
+        ...(settingsToSave || {}), 
+        updatedAt: new Date().toISOString() 
+      }
+      
       const response = await fetch('/api/settings/model', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedSettings)
       })
+      
       if (response.ok) {
         setModelSettings(updatedSettings)
         setShowSettings(false)
+        setSettingsError(null)
+      } else {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
     } catch (error) {
       console.error('Failed to save settings:', error)
+      setSettingsError('설정 저장에 실패했습니다.')
     }
   }
 
@@ -272,10 +296,15 @@ export default function ChatPage() {
                 {chatRooms.find(room => room.id === selectedRoom)?.name}
               </h2>
               <button
-                onClick={() => setShowSettings(true)}
-                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                onClick={() => {
+                  setShowSettings(true)
+                  setSettingsError(null)
+                  loadModelSettings()
+                }}
+                className="flex items-center px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
               >
-                <Settings className="w-5 h-5" />
+                <Settings className="w-5 h-5 mr-2" />
+                설정
               </button>
             </div>
 
@@ -361,107 +390,193 @@ export default function ChatPage() {
       {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900">LLM 설정</h3>
+              <h3 className="text-lg font-semibold text-gray-900">설정</h3>
               <button
-                onClick={() => setShowSettings(false)}
+                onClick={() => {
+                  setShowSettings(false)
+                  setSettingsError(null)
+                }}
                 className="text-gray-400 hover:text-gray-600"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
+            {settingsError && (
+              <div className="mb-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded-lg text-sm">
+                {settingsError}
+              </div>
+            )}
+
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  모델 타입
-                </label>
-                <div className="space-y-2">
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="modelType"
-                      value="openai"
-                      checked={modelSettings.modelType === 'openai'}
-                      onChange={(e) => saveModelSettings({ modelType: e.target.value as 'openai' })}
-                      className="mr-2"
-                    />
-                    ChatGPT API
-                  </label>
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="modelType"
-                      value="local"
-                      checked={modelSettings.modelType === 'local'}
-                      onChange={(e) => {
-                        const newType = e.target.value as 'local'
-                        setModelSettings(prev => ({ ...prev, modelType: newType }))
-                        if (newType === 'local') {
-                          loadAvailableModels()
-                        }
-                      }}
-                      className="mr-2"
-                    />
-                    Local LLM (Ollama)
-                  </label>
-                </div>
+              {/* Chat Settings Section */}
+              <div className="border border-gray-200 rounded-lg">
+                <button
+                  onClick={() => setChatSettingsExpanded(!chatSettingsExpanded)}
+                  className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
+                >
+                  <h4 className="font-medium text-gray-900">대화방 설정</h4>
+                  <ChevronDown 
+                    className={`w-5 h-5 text-gray-500 transition-transform ${
+                      chatSettingsExpanded ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+                {chatSettingsExpanded && (
+                  <div className="px-4 pb-4 border-t border-gray-200">
+                    <div className="space-y-3 mt-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          대화방 이름
+                        </label>
+                        <input
+                          type="text"
+                          value={chatRooms.find(room => room.id === selectedRoom)?.name || ''}
+                          onChange={(e) => {
+                            const newName = e.target.value
+                            setChatRooms(prev => prev.map(room =>
+                              room.id === selectedRoom
+                                ? { ...room, name: newName }
+                                : room
+                            ))
+                          }}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="대화방 이름을 입력하세요"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          메시지 기록
+                        </label>
+                        <p className="text-sm text-gray-600">
+                          현재 대화방에 {messages.length}개의 메시지가 있습니다
+                        </p>
+                        <button
+                          onClick={() => setMessages([])}
+                          className="mt-2 px-3 py-1 text-sm bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors"
+                        >
+                          대화 기록 삭제
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {modelSettings.modelType === 'openai' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    OpenAI API 키
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="sk-..."
-                    value={modelSettings.openaiApiKey || ''}
-                    onChange={(e) => setModelSettings(prev => ({ ...prev, openaiApiKey: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              {/* Model Settings Section */}
+              <div className="border border-gray-200 rounded-lg">
+                <button
+                  onClick={() => setModelSettingsExpanded(!modelSettingsExpanded)}
+                  className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
+                >
+                  <h4 className="font-medium text-gray-900">모델 설정</h4>
+                  <ChevronDown 
+                    className={`w-5 h-5 text-gray-500 transition-transform ${
+                      modelSettingsExpanded ? 'rotate-180' : ''
+                    }`}
                   />
-                  <p className="text-xs text-gray-500 mt-1">
-                    🔒 API 키는 암호화되어 안전하게 저장됩니다
-                  </p>
-                </div>
-              )}
+                </button>
+                {modelSettingsExpanded && (
+                  <div className="px-4 pb-4 border-t border-gray-200">
+                    <div className="space-y-3 mt-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          모델 타입
+                        </label>
+                        <div className="space-y-2">
+                          <label className="flex items-center">
+                            <input
+                              type="radio"
+                              name="modelType"
+                              value="openai"
+                              checked={modelSettings.modelType === 'openai'}
+                              onChange={(e) => setModelSettings(prev => ({ ...prev, modelType: e.target.value as 'openai' }))}
+                              className="mr-2"
+                            />
+                            ChatGPT API
+                          </label>
+                          <label className="flex items-center">
+                            <input
+                              type="radio"
+                              name="modelType"
+                              value="local"
+                              checked={modelSettings.modelType === 'local'}
+                              onChange={(e) => {
+                                const newType = e.target.value as 'local'
+                                setModelSettings(prev => ({ ...prev, modelType: newType }))
+                                if (newType === 'local') {
+                                  loadAvailableModels()
+                                }
+                              }}
+                              className="mr-2"
+                            />
+                            Local LLM (Ollama)
+                          </label>
+                        </div>
+                      </div>
 
-              {modelSettings.modelType === 'local' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    사용할 모델
-                  </label>
-                  {loadingModels ? (
-                    <div className="text-sm text-gray-500">모델 목록 불러오는 중...</div>
-                  ) : availableModels.length > 0 ? (
-                    <select
-                      value={modelSettings.modelId || ''}
-                      onChange={(e) => setModelSettings(prev => ({ ...prev, modelId: e.target.value }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    >
-                      <option value="">모델을 선택하세요</option>
-                      {availableModels.map(model => (
-                        <option key={model} value={model}>{model}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <div className="text-sm text-gray-500">
-                      사용 가능한 모델이 없습니다. Ollama가 실행 중인지 확인하세요.
+                      {modelSettings.modelType === 'openai' && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            OpenAI API 키
+                          </label>
+                          <input
+                            type="password"
+                            placeholder="sk-..."
+                            value={modelSettings.openaiApiKey || ''}
+                            onChange={(e) => setModelSettings(prev => ({ ...prev, openaiApiKey: e.target.value }))}
+                            className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          />
+                          <p className="text-xs text-gray-500 mt-1">
+                            🔒 API 키는 암호화되어 안전하게 저장됩니다
+                          </p>
+                        </div>
+                      )}
+
+                      {modelSettings.modelType === 'local' && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            사용할 모델
+                          </label>
+                          {loadingModels ? (
+                            <div className="text-sm text-gray-500">모델 목록 불러오는 중...</div>
+                          ) : availableModels.length > 0 ? (
+                            <select
+                              value={modelSettings.modelId || ''}
+                              onChange={(e) => setModelSettings(prev => ({ ...prev, modelId: e.target.value }))}
+                              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            >
+                              <option value="">모델을 선택하세요</option>
+                              {availableModels.map(model => (
+                                <option key={model} value={model}>{model}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <div className="text-sm text-gray-500">
+                              사용 가능한 모델이 없습니다. Ollama가 실행 중인지 확인하세요.
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              )}
+                  </div>
+                )}
+              </div>
 
               <div className="flex justify-end space-x-3 pt-4">
                 <button
-                  onClick={() => setShowSettings(false)}
+                  onClick={() => {
+                    setShowSettings(false)
+                    setSettingsError(null)
+                  }}
                   className="px-4 py-2 text-gray-600 hover:text-gray-800"
                 >
                   취소
                 </button>
                 <button
-                  onClick={() => saveModelSettings(modelSettings)}
+                  onClick={() => saveModelSettings()}
                   disabled={
                     (modelSettings.modelType === 'local' && !modelSettings.modelId) ||
                     (modelSettings.modelType === 'openai' && !modelSettings.openaiApiKey)

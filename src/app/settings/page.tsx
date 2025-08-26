@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { ArrowLeft, Download, Check, AlertCircle, Settings2 } from 'lucide-react'
+import { ArrowLeft, Download, Check, AlertCircle, Settings2, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { LanguageModelRecommendation } from '../../components/LanguageModelRecommendation'
 import { ModelPathSettings } from '../../components/ModelPathSettings'
@@ -239,10 +239,19 @@ export default function SettingsPage() {
         const data = await response.json()
         const installedModelIds = data.models.map((m: any) => m.name)
         
-        setModels(prev => prev.map(model => ({
-          ...model,
-          installed: installedModelIds.includes(model.id)
-        })))
+        // 디버깅: 설치된 모델 목록 출력
+        console.log('설치된 모델 목록:', installedModelIds)
+        console.log('UI 모델 ID들:', models.map(m => m.id))
+        
+        setModels(prev => prev.map(model => {
+          // 정확한 매칭: 모델 ID가 완전히 일치해야 함
+          const isInstalled = installedModelIds.includes(model.id)
+          console.log(`모델 ${model.id}: ${isInstalled ? '설치됨' : '미설치'}`)
+          return {
+            ...model,
+            installed: isInstalled
+          }
+        }))
       }
     } catch (error) {
       console.error('Failed to check installed models:', error)
@@ -369,6 +378,45 @@ export default function SettingsPage() {
     }
   }
 
+  const deleteModel = async (modelId: string) => {
+    if (!confirm(`${modelId} 모델을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) {
+      return
+    }
+
+    try {
+      const response = await fetch('/api/ollama/delete', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ modelId }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        // 로컬 상태에서 모델을 설치되지 않음으로 업데이트
+        setModels(prev => prev.map(model => 
+          model.id === modelId 
+            ? { ...model, installed: false }
+            : model
+        ))
+
+        // 현재 사용 중인 모델이 삭제된 경우 OpenAI로 변경
+        if (currentModel === modelId) {
+          await selectModel('openai')
+        }
+
+        alert(`${modelId} 모델이 성공적으로 삭제되었습니다.`)
+      } else {
+        throw new Error(data.error || 'Failed to delete model')
+      }
+    } catch (error) {
+      console.error('Model deletion failed:', error)
+      alert('모델 삭제에 실패했습니다. Ollama가 실행 중인지 확인해주세요.')
+    }
+  }
+
   // 모델 필터링 함수
   const filteredModels = models.filter(model => {
     const searchLower = searchQuery.toLowerCase()
@@ -398,7 +446,7 @@ export default function SettingsPage() {
         <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200 mb-8">
           <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
             <Settings2 className="w-5 h-5 mr-2" />
-            현재 사용 중인 모델
+            현재 사용가능한 모델
           </h2>
           
           <div className="space-y-4">
@@ -431,6 +479,13 @@ export default function SettingsPage() {
                   <div className="font-medium text-gray-900">{model.name} (로컬)</div>
                   <div className="text-sm text-gray-600">{model.description}</div>
                 </label>
+                <button
+                  onClick={() => deleteModel(model.id)}
+                  className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition-colors"
+                  title="모델 삭제"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
             ))}
           </div>
@@ -526,12 +581,21 @@ export default function SettingsPage() {
                         <p className="text-sm text-gray-600 mb-2">{model.description}</p>
                       </div>
 
-                      <div className="ml-4">
+                      <div className="ml-4 flex items-center space-x-2">
                         {model.installed ? (
-                          <div className="flex items-center text-green-600">
-                            <Check className="w-4 h-4 mr-1" />
-                            <span className="text-sm">설치됨</span>
-                          </div>
+                          <>
+                            <div className="flex items-center text-green-600">
+                              <Check className="w-4 h-4 mr-1" />
+                              <span className="text-sm">설치됨</span>
+                            </div>
+                            <button
+                              onClick={() => deleteModel(model.id)}
+                              className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"
+                              title="모델 삭제"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </>
                         ) : model.downloading ? (
                           <div className="flex flex-col items-end">
                             <div className="flex items-center text-blue-600 mb-1">
@@ -595,12 +659,21 @@ export default function SettingsPage() {
                           <p className="text-xs text-gray-600">{model.description}</p>
                         </div>
 
-                        <div className="ml-3">
+                        <div className="ml-3 flex items-center space-x-1">
                           {model.installed ? (
-                            <div className="flex items-center text-green-600">
-                              <Check className="w-3 h-3 mr-1" />
-                              <span className="text-xs">설치됨</span>
-                            </div>
+                            <>
+                              <div className="flex items-center text-green-600">
+                                <Check className="w-3 h-3 mr-1" />
+                                <span className="text-xs">설치됨</span>
+                              </div>
+                              <button
+                                onClick={() => deleteModel(model.id)}
+                                className="p-0.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"
+                                title="모델 삭제"
+                              >
+                                <Trash2 className="w-2.5 h-2.5" />
+                              </button>
+                            </>
                           ) : model.downloading ? (
                             <div className="flex items-center text-blue-600">
                               <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-600 mr-1"></div>

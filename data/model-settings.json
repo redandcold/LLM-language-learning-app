@@ -1,4 +1,5 @@
 {
-  "modelType": "openai",
-  "updatedAt": "2025-08-24T16:07:28.172Z"
+  "modelType": "local",
+  "modelId": "qwen2.5:0.5b",
+  "updatedAt": "2025-08-26T07:57:19.172Z"
 }

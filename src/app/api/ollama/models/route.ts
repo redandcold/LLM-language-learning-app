@@ -1,21 +1,76 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import fs from 'fs'
+import path from 'path'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
 export async function GET(request: NextRequest) {
+  // 인증 확인 (선택사항 - 디버깅을 위해 주석처리)
+  // const session = await getServerSession()
+  // if (!session) {
+  //   return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // }
   try {
-    const response = await fetch('http://localhost:11434/api/tags', {
-      method: 'GET',
-      signal: AbortSignal.timeout(10000)
-    })
-
-    if (!response.ok) {
-      throw new Error('Ollama server not responding')
+    console.log('API: Fetching models...')
+    
+    // 먼저 Ollama API 시도
+    let ollamaModels = []
+    try {
+      const response = await fetch('http://localhost:11434/api/tags', {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000)
+      })
+      if (response.ok) {
+        const data = await response.json()
+        ollamaModels = data.models || []
+        console.log('API: Ollama API returned:', ollamaModels.length, 'models')
+      }
+    } catch (error) {
+      console.log('API: Ollama API not available, checking project folder...')
     }
-
-    const data = await response.json()
+    
+    // Ollama API에서 모델이 없으면 프로젝트 폴더 직접 스캔
+    if (ollamaModels.length === 0) {
+      const projectModelsPath = path.join(process.cwd(), 'ollama-models', 'manifests', 'registry.ollama.ai', 'library')
+      console.log('API: Scanning project folder:', projectModelsPath)
+      
+      if (fs.existsSync(projectModelsPath)) {
+        const modelFolders = fs.readdirSync(projectModelsPath)
+        const projectModels = []
+        
+        for (const modelFolder of modelFolders) {
+          const modelPath = path.join(projectModelsPath, modelFolder)
+          if (fs.statSync(modelPath).isDirectory()) {
+            const variants = fs.readdirSync(modelPath)
+            for (const variant of variants) {
+              const modelId = `${modelFolder}:${variant}`
+              projectModels.push({
+                name: modelId,
+                model: modelId,
+                modified_at: new Date().toISOString(),
+                size: 0,
+                digest: "local",
+                details: {
+                  format: "gguf",
+                  family: modelFolder,
+                  parameter_size: variant.toUpperCase(),
+                  quantization_level: "Q4_K_M"
+                }
+              })
+            }
+          }
+        }
+        
+        console.log('API: Found', projectModels.length, 'models in project folder')
+        ollamaModels = projectModels
+      }
+    }
     
     return NextResponse.json({ 
       success: true, 
-      models: data.models || [] 
+      models: ollamaModels 
     })
   } catch (error) {
     console.error('Failed to fetch Ollama models:', error)
