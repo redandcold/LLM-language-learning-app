@@ -34,7 +34,32 @@ function loadModelSettings(): ModelSettings {
   }
 }
 
-async function callOllamaAPI(modelId: string, messages: any[]) {
+function createLanguageLearningPrompt(languageSettings?: { mainLanguage: string, learningLanguage: string }): string {
+  if (!languageSettings) {
+    return 'You are a helpful language learning assistant. Help users practice languages by having conversations, correcting mistakes, and providing explanations. Respond in a friendly and encouraging manner.'
+  }
+
+  const { mainLanguage, learningLanguage } = languageSettings
+
+  return `You are a professional language learning assistant specialized in helping users learn ${learningLanguage}. 
+
+IMPORTANT INSTRUCTIONS:
+- Always respond in ${mainLanguage} unless the user specifically asks you to respond in ${learningLanguage}
+- Your primary role is to help the user learn and practice ${learningLanguage}
+- When the user asks questions about ${learningLanguage} (grammar, vocabulary, expressions, culture), provide detailed explanations in ${mainLanguage}
+- If the user writes in ${learningLanguage}, you should:
+  1. Acknowledge their effort
+  2. Gently correct any mistakes if present
+  3. Explain the corrections in ${mainLanguage}
+  4. Provide additional context or examples
+- Be encouraging, patient, and supportive
+- Use examples and comparisons that would be familiar to a ${mainLanguage} speaker
+- If asked about other topics not related to ${learningLanguage} learning, still respond in ${mainLanguage} but try to relate back to language learning when appropriate
+
+Current learning focus: User is a ${mainLanguage} speaker learning ${learningLanguage}.`
+}
+
+async function callOllamaAPIStreaming(modelId: string, messages: any[], systemPrompt: string) {
   const response = await fetch('http://localhost:11434/api/chat', {
     method: 'POST',
     headers: {
@@ -45,26 +70,25 @@ async function callOllamaAPI(modelId: string, messages: any[]) {
       messages: [
         {
           role: 'system',
-          content: 'You are a helpful language learning assistant. Help users practice languages by having conversations, correcting mistakes, and providing explanations. Respond in a friendly and encouraging manner.'
+          content: systemPrompt
         },
         ...messages
       ],
-      stream: false
+      stream: true
     }),
-    signal: AbortSignal.timeout(30000) // 30초로 타임아웃 단축
+    signal: AbortSignal.timeout(180000) // 180초로 타임아웃 확대 (3분)
   })
 
   if (!response.ok) {
     throw new Error(`Ollama API error: ${response.status}`)
   }
 
-  const data = await response.json()
-  return data.message?.content || 'Sorry, I couldn\'t generate a response.'
+  return response
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, history, chatRoomId } = await request.json()
+    const { message, history, chatRoomId, languageSettings } = await request.json()
     const session = await getServerSession(authOptions)
     
     if (!session?.user?.id) {
@@ -73,6 +97,24 @@ export async function POST(request: NextRequest) {
 
     const settings = loadModelSettings()
     console.log('🔧 현재 모델 설정:', settings)
+
+    // 채팅룸이 있으면 DB에서 언어 설정을 불러오고, 없으면 요청의 설정을 사용
+    let finalLanguageSettings = languageSettings
+    if (chatRoomId) {
+      const existingRoom = await prisma.chatRoom.findUnique({
+        where: { id: chatRoomId, userId: session.user.id }
+      })
+      if (existingRoom) {
+        finalLanguageSettings = {
+          mainLanguage: existingRoom.mainLanguage,
+          learningLanguage: existingRoom.learningLanguage
+        }
+      }
+    }
+
+    // 언어 설정에 따른 시스템 프롬프트 생성
+    const systemPrompt = createLanguageLearningPrompt(finalLanguageSettings)
+    console.log('🌐 언어 설정:', finalLanguageSettings)
 
     // 채팅룸이 없으면 생성
     let currentChatRoom
@@ -86,9 +128,25 @@ export async function POST(request: NextRequest) {
       currentChatRoom = await prisma.chatRoom.create({
         data: {
           title: message.slice(0, 50) + (message.length > 50 ? '...' : ''),
-          userId: session.user.id
+          userId: session.user.id,
+          mainLanguage: languageSettings?.mainLanguage || '한국어',
+          learningLanguage: languageSettings?.learningLanguage || '영어'
         }
       })
+    } else if (languageSettings && languageSettings.mainLanguage && languageSettings.learningLanguage) {
+      // 기존 채팅룸의 언어 설정 업데이트 (유효한 값만)
+      try {
+        currentChatRoom = await prisma.chatRoom.update({
+          where: { id: currentChatRoom.id },
+          data: {
+            mainLanguage: languageSettings.mainLanguage,
+            learningLanguage: languageSettings.learningLanguage
+          }
+        })
+      } catch (error) {
+        console.warn('언어 설정 업데이트 실패, 기본값 사용:', error)
+        // 업데이트 실패시 기존 값 유지
+      }
     }
 
     // 사용자 메시지를 DB에 저장
@@ -114,18 +172,134 @@ export async function POST(request: NextRequest) {
     let assistantResponse: string
 
     if (settings.modelType === 'local' && settings.modelId) {
-      // 로컬 LLM 사용
-      console.log('🤖 로컬 모델 사용:', settings.modelId)
+      // 로컬 LLM 스트리밍 사용
+      console.log('🤖 로컬 모델 스트리밍 사용:', settings.modelId)
+      
+      // 모델 자동 전환/로딩
       try {
-        assistantResponse = await callOllamaAPI(settings.modelId, messages)
-        console.log('✅ 로컬 모델 응답 성공')
+        console.log('🔄 모델 관리 시작:', settings.modelId)
+        const modelManageResponse = await fetch('http://localhost:3000/api/ollama/manage-model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'switch',
+            modelId: settings.modelId
+          })
+        })
+        
+        if (modelManageResponse.ok) {
+          const manageResult = await modelManageResponse.json()
+          console.log('✅ 모델 관리 완료:', manageResult)
+          
+          if (manageResult.results?.unloaded) {
+            console.log('📤 이전 모델 언로딩:', manageResult.results.unloaded)
+          }
+        } else {
+          console.warn('⚠️ 모델 관리 실패, 계속 진행:', await modelManageResponse.text())
+        }
+      } catch (modelError) {
+        console.warn('⚠️ 모델 관리 오류, 계속 진행:', modelError)
+      }
+      
+      try {
+        const ollamaResponse = await callOllamaAPIStreaming(settings.modelId, messages, systemPrompt)
+        
+        // 스트리밍 응답을 위한 ReadableStream 생성
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          async start(controller) {
+            let fullResponse = ''
+            
+            try {
+              const reader = ollamaResponse.body?.getReader()
+              if (!reader) throw new Error('No response body')
+              
+              while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                
+                const chunk = new TextDecoder().decode(value)
+                const lines = chunk.split('\n').filter(line => line.trim())
+                
+                for (const line of lines) {
+                  try {
+                    const data = JSON.parse(line)
+                    if (data.message?.content) {
+                      fullResponse += data.message.content
+                      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: data.message.content, fullResponse })}\n\n`))
+                    }
+                    
+                    if (data.done) {
+                      // 완료된 응답을 DB에 저장
+                      await prisma.message.create({
+                        data: {
+                          content: fullResponse,
+                          role: 'assistant',
+                          chatRoomId: currentChatRoom.id
+                        }
+                      })
+                      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, chatRoomId: currentChatRoom.id })}\n\n`))
+                      controller.close()
+                      return
+                    }
+                  } catch (e) {
+                    // JSON 파싱 오류 무시
+                  }
+                }
+              }
+            } catch (error) {
+              console.error('스트리밍 오류:', error)
+              let streamErrorMessage = '스트리밍 중 오류가 발생했습니다.'
+              
+              if (error instanceof Error) {
+                if (error.message.includes('terminated') || error.message.includes('Socket')) {
+                  streamErrorMessage = '연결이 중단되었습니다. Ollama 서비스를 확인해주세요.'
+                } else if (error.message.includes('ECONNREFUSED')) {
+                  streamErrorMessage = 'Ollama 서비스에 연결할 수 없습니다.'
+                }
+              }
+              
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: streamErrorMessage })}\n\n`))
+              controller.close()
+            }
+          }
+        })
+        
+        return new NextResponse(stream, {
+          headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Transfer-Encoding': 'chunked',
+          },
+        })
+        
       } catch (error) {
         console.error('Ollama API error:', error)
-        if (error instanceof Error && error.name === 'TimeoutError') {
-          assistantResponse = '응답 생성 중입니다. 로컬 모델이 처리하는데 시간이 오래 걸릴 수 있습니다. 잠시만 기다려주세요.'
-        } else {
-          assistantResponse = '로컬 모델에서 오류가 발생했습니다. Ollama가 실행 중이고 모델이 설치되어 있는지 확인해주세요.'
+        
+        let errorMessage = '로컬 모델에서 오류가 발생했습니다.'
+        
+        if (error instanceof Error) {
+          if (error.message.includes('ECONNREFUSED') || error.message.includes('fetch failed')) {
+            errorMessage = '💡 Ollama 서비스에 연결할 수 없습니다.\n\n다음을 확인해주세요:\n1. Ollama가 실행 중인지 확인 (ollama serve)\n2. 모델이 메모리에 로드되어 있는지 확인\n3. 다른 프로그램이 Ollama를 사용 중인지 확인\n\n잠시 후 다시 시도해보세요.'
+          } else if (error.name === 'TimeoutError' || error.message.includes('timeout')) {
+            errorMessage = '⏱️ 모델 응답 시간이 초과되었습니다.\n\nLlama 3.1 8B는 큰 모델로 처리 시간이 오래 걸릴 수 있습니다.\n더 빠른 응답을 원하시면 qwen2.5:0.5b 모델을 사용해보세요.'
+          } else if (error.message.includes('terminated') || error.message.includes('Socket')) {
+            errorMessage = '🔌 연결이 중단되었습니다.\n\nOllama 서비스가 불안정할 수 있습니다.\n잠시 후 다시 시도해보세요.'
+          }
         }
+        
+        // AI 응답을 DB에 저장
+        await prisma.message.create({
+          data: {
+            content: errorMessage,
+            role: 'assistant',
+            chatRoomId: currentChatRoom.id
+          }
+        })
+
+        return NextResponse.json({ 
+          response: errorMessage,
+          chatRoomId: currentChatRoom.id
+        })
       }
     } else if (settings.modelType === 'openai' && settings.openaiApiKey) {
       // OpenAI API 사용 (사용자 제공 키)
@@ -141,7 +315,7 @@ export async function POST(request: NextRequest) {
           messages: [
             {
               role: 'system',
-              content: 'You are a helpful language learning assistant. Help users practice languages by having conversations, correcting mistakes, and providing explanations. Respond in a friendly and encouraging manner.'
+              content: systemPrompt
             },
             ...messages
           ],

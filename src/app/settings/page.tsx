@@ -216,11 +216,31 @@ export default function SettingsPage() {
   const [ollamaInstalled, setOllamaInstalled] = useState<boolean | null>(null)
   const [currentModel, setCurrentModel] = useState<string>('openai')
   const [searchQuery, setSearchQuery] = useState('')
+  const [modelStatus, setModelStatus] = useState<any>(null)
+  const [switchingModel, setSwitchingModel] = useState(false)
 
   useEffect(() => {
     checkOllamaStatus()
     checkInstalledModels()
+    checkModelStatus()
   }, [])
+
+  const checkModelStatus = async () => {
+    try {
+      const response = await fetch('/api/ollama/manage-model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'status' })
+      })
+      
+      if (response.ok) {
+        const status = await response.json()
+        setModelStatus(status)
+      }
+    } catch (error) {
+      console.error('Failed to check model status:', error)
+    }
+  }
 
   const checkOllamaStatus = async () => {
     try {
@@ -237,21 +257,69 @@ export default function SettingsPage() {
       const response = await fetch('/api/ollama/models')
       if (response.ok) {
         const data = await response.json()
-        const installedModelIds = data.models.map((m: any) => m.name)
         
-        // 디버깅: 설치된 모델 목록 출력
-        console.log('설치된 모델 목록:', installedModelIds)
-        console.log('UI 모델 ID들:', models.map(m => m.id))
+        // 디버깅: API 응답 출력
+        console.log('API 응답:', data)
+        console.log('설치된 모델들:', data.models)
         
-        setModels(prev => prev.map(model => {
-          // 정확한 매칭: 모델 ID가 완전히 일치해야 함
-          const isInstalled = installedModelIds.includes(model.id)
-          console.log(`모델 ${model.id}: ${isInstalled ? '설치됨' : '미설치'}`)
-          return {
-            ...model,
-            installed: isInstalled
-          }
-        }))
+        if (data.models && Array.isArray(data.models)) {
+          const installedModelIds = data.models.map((m: any) => {
+            // 다양한 형태의 모델 데이터 처리
+            return m.name || m.model || m.id || m
+          })
+          
+          console.log('처리된 설치된 모델 ID들:', installedModelIds)
+          console.log('UI 모델 ID들:', models.map(m => m.id))
+          
+          setModels(prev => {
+            const updatedModels = prev.map(model => {
+              // 다양한 매칭 방식 시도
+              const isInstalled = installedModelIds.some(installedId => {
+                // 정확한 일치
+                if (installedId === model.id) return true
+                // 태그 없이 비교 (예: llama3.1:8b vs llama3.1)
+                if (installedId.includes(':') && installedId === model.id) return true
+                if (model.id.includes(':') && installedId === model.id.split(':')[0]) return true
+                // 부분 일치
+                if (installedId.toLowerCase().includes(model.id.toLowerCase().split(':')[0])) return true
+                return false
+              })
+              
+              console.log(`모델 ${model.id}: ${isInstalled ? '설치됨' : '미설치'}`)
+              return {
+                ...model,
+                installed: isInstalled
+              }
+            })
+            
+            // 하드코딩된 리스트에 없는 설치된 모델들을 동적으로 추가
+            installedModelIds.forEach(installedId => {
+              if (typeof installedId === 'string' && installedId.trim()) {
+                const exists = updatedModels.some(model => 
+                  model.id === installedId || 
+                  installedId.toLowerCase().includes(model.id.toLowerCase().split(':')[0])
+                )
+                
+                if (!exists) {
+                  // 새로운 설치된 모델을 동적으로 추가
+                  const newModel: LocalModel = {
+                    id: installedId,
+                    name: installedId.charAt(0).toUpperCase() + installedId.slice(1).replace(':', ' '),
+                    size: '알 수 없음',
+                    description: '사용자가 설치한 모델',
+                    recommended: false,
+                    installed: true,
+                    downloading: false
+                  }
+                  updatedModels.push(newModel)
+                  console.log('동적으로 추가된 모델:', newModel)
+                }
+              }
+            })
+            
+            return updatedModels
+          })
+        }
       }
     } catch (error) {
       console.error('Failed to check installed models:', error)
@@ -357,7 +425,10 @@ export default function SettingsPage() {
 
   const selectModel = async (modelType: string, modelId?: string) => {
     try {
-      const response = await fetch('/api/settings/model', {
+      setSwitchingModel(true)
+      
+      // 1. 모델 설정 저장
+      const settingsResponse = await fetch('/api/settings/model', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -368,13 +439,57 @@ export default function SettingsPage() {
         }),
       })
 
-      if (response.ok) {
-        setCurrentModel(modelType === 'openai' ? 'openai' : modelId || 'local')
-        alert('모델이 성공적으로 변경되었습니다!')
+      if (!settingsResponse.ok) {
+        throw new Error('Failed to save model settings')
       }
+
+      // 2. 로컬 모델인 경우 스마트 전환 수행
+      if (modelType === 'local' && modelId) {
+        console.log('🔄 스마트 모델 전환 시작:', modelId)
+        
+        const switchResponse = await fetch('/api/ollama/manage-model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'switch',
+            modelId: modelId
+          })
+        })
+
+        if (switchResponse.ok) {
+          const switchResult = await switchResponse.json()
+          console.log('✅ 모델 전환 완료:', switchResult)
+          
+          let message = `✅ ${modelId} 모델로 전환 완료!`
+          
+          if (switchResult.results?.unloaded?.success) {
+            message += `\n📤 이전 모델 (${switchResult.results.unloaded.model}) 메모리 해제됨`
+          }
+          
+          if (switchResult.results?.loaded?.size) {
+            message += `\n💾 메모리 사용량: ${switchResult.results.loaded.size}`
+            message += `\n⏰ 유지 시간: ${switchResult.results.loaded.keepAlive}`
+          }
+          
+          alert(message)
+        } else {
+          console.warn('모델 전환 실패, 기본 설정으로 진행')
+          alert('⚠️ 모델 전환 중 문제가 발생했지만 설정은 저장되었습니다.')
+        }
+      } else {
+        alert('✅ 모델이 성공적으로 변경되었습니다!')
+      }
+
+      setCurrentModel(modelType === 'openai' ? 'openai' : modelId || 'local')
+      
+      // 상태 새로고침
+      checkModelStatus()
+      
     } catch (error) {
       console.error('Failed to update model setting:', error)
-      alert('모델 설정 변경에 실패했습니다.')
+      alert('❌ 모델 설정 변경에 실패했습니다.')
+    } finally {
+      setSwitchingModel(false)
     }
   }
 
@@ -442,11 +557,75 @@ export default function SettingsPage() {
           <p className="text-gray-600 mt-2">LLM 모델을 선택하고 관리하세요</p>
         </div>
 
+        {/* Model Memory Status */}
+        {modelStatus && (
+          <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200 mb-6">
+            <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
+              💾 메모리 사용 현황
+            </h2>
+            
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <h3 className="font-medium text-gray-800">현재 로드된 모델</h3>
+                {modelStatus.loadedModels && modelStatus.loadedModels.length > 0 ? (
+                  modelStatus.loadedModels.map((model: any, index: number) => (
+                    <div key={index} className="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg">
+                      <div>
+                        <div className="font-medium text-green-800">{model.name}</div>
+                        <div className="text-sm text-green-600">
+                          💾 {model.size || '알 수 없음'} 
+                          {model.size_vram && ` (VRAM: ${model.size_vram})`}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xs text-green-600">
+                          {model.expires_at ? 
+                            `⏰ ${new Date(model.expires_at).toLocaleTimeString()}까지 유지` :
+                            '🔄 활성 상태'
+                          }
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-600">
+                    메모리에 로드된 모델이 없습니다
+                  </div>
+                )}
+              </div>
+              
+              <div className="space-y-2">
+                <h3 className="font-medium text-gray-800">모델별 메모리 효율성</h3>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between p-2 bg-blue-50 border border-blue-200 rounded">
+                    <span className="text-sm">qwen2.5:0.5b</span>
+                    <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">397MB • 빠름 🚀</span>
+                  </div>
+                  <div className="flex items-center justify-between p-2 bg-yellow-50 border border-yellow-200 rounded">
+                    <span className="text-sm">llama3.1:8b</span>
+                    <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">4.9GB • 무거움 ⚡</span>
+                  </div>
+                </div>
+                
+                <div className="mt-3 p-2 bg-gray-50 rounded text-xs text-gray-600">
+                  💡 <strong>팁:</strong> 작은 모델은 30분, 큰 모델은 10분간 메모리 유지
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Current Model Selection */}
         <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200 mb-8">
           <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
             <Settings2 className="w-5 h-5 mr-2" />
             현재 사용가능한 모델
+            {switchingModel && (
+              <div className="ml-2 flex items-center text-blue-600">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-1"></div>
+                <span className="text-sm">전환 중...</span>
+              </div>
+            )}
           </h2>
           
           <div className="space-y-4">

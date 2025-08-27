@@ -37,6 +37,10 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       chatRoom,
+      languageSettings: {
+        mainLanguage: chatRoom.mainLanguage,
+        learningLanguage: chatRoom.learningLanguage
+      },
       messages: chatRoom.messages.map(msg => ({
         id: msg.id,
         content: msg.content,

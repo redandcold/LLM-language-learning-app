@@ -63,13 +63,15 @@ model VerificationToken {
 }
 
 model ChatRoom {
-  id        String      @id @default(cuid())
-  title     String
-  userId    String
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages  Message[]
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  id              String      @id @default(cuid())
+  title           String
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages        Message[]
+  mainLanguage    String      @default("한국어")    // AI가 답변할 언어
+  learningLanguage String     @default("영어")     // 사용자가 배울 언어
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
   
   @@index([userId, updatedAt]) // 사용자별 최근 대화방 조회 최적화
 }

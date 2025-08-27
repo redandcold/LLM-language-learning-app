@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Send, ArrowLeft, Plus, Settings, X, ChevronDown } from 'lucide-react'
 import Link from 'next/link'
 
@@ -25,6 +25,11 @@ interface ModelSettings {
   updatedAt: string
 }
 
+interface LanguageSettings {
+  mainLanguage: string
+  learningLanguage: string
+}
+
 export default function ChatPage() {
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([])
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null)
@@ -38,6 +43,14 @@ export default function ChatPage() {
   const [chatSettingsExpanded, setChatSettingsExpanded] = useState(true)
   const [modelSettingsExpanded, setModelSettingsExpanded] = useState(true)
   const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [languageSettings, setLanguageSettings] = useState<LanguageSettings>({
+    mainLanguage: '한국어',
+    learningLanguage: '영어'
+  })
+  
+  // 자동 스크롤을 위한 ref
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     loadModelSettings()
@@ -49,6 +62,15 @@ export default function ChatPage() {
       loadChatHistory(selectedRoom)
     }
   }, [selectedRoom])
+
+  // 메시지가 업데이트될 때마다 스크롤을 맨 아래로
+  useEffect(() => {
+    scrollToBottom()
+  }, [messages])
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
 
   const loadChatRooms = async () => {
     try {
@@ -85,6 +107,11 @@ export default function ChatPage() {
           timestamp: new Date(msg.timestamp)
         }))
         setMessages(messages)
+        
+        // 언어 설정 업데이트
+        if (data.languageSettings) {
+          setLanguageSettings(data.languageSettings)
+        }
       }
     } catch (error) {
       console.error('Failed to load chat history:', error)
@@ -118,14 +145,29 @@ export default function ChatPage() {
       const response = await fetch('/api/ollama/models')
       if (response.ok) {
         const data = await response.json()
-        const modelNames = data.models?.map((model: any) => model.name || model.model || model) || []
-        setAvailableModels(modelNames)
+        console.log('Models API response:', data) // 디버깅용
+        
+        if (data.models && Array.isArray(data.models)) {
+          const modelNames = data.models.map((model: any) => {
+            // 다양한 형태의 모델 데이터 처리
+            if (typeof model === 'string') {
+              return model
+            }
+            return model.name || model.model || JSON.stringify(model)
+          })
+          console.log('Processed model names:', modelNames) // 디버깅용
+          setAvailableModels(modelNames)
+        } else {
+          console.warn('Invalid models data structure:', data)
+          setAvailableModels([])
+        }
       } else {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
     } catch (error) {
       console.error('Failed to load models:', error)
       setSettingsError('사용 가능한 모델을 불러오는데 실패했습니다.')
+      setAvailableModels([])
     } finally {
       setLoadingModels(false)
     }
@@ -189,6 +231,16 @@ export default function ChatPage() {
     setInputMessage('')
     setIsLoading(true)
 
+    // 임시 assistant 메시지 추가 (스트리밍용)
+    const tempAssistantId = (Date.now() + 1).toString()
+    const tempAssistantMessage: Message = {
+      id: tempAssistantId,
+      content: '',
+      role: 'assistant',
+      timestamp: new Date()
+    }
+    setMessages(prev => [...prev, tempAssistantMessage])
+
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -198,7 +250,8 @@ export default function ChatPage() {
         body: JSON.stringify({
           message: userMessage.content,
           history: messages,
-          chatRoomId: selectedRoom
+          chatRoomId: selectedRoom,
+          languageSettings
         }),
       })
 
@@ -206,33 +259,84 @@ export default function ChatPage() {
         throw new Error('Failed to send message')
       }
 
-      const data = await response.json()
+      // 스트리밍 응답인지 일반 응답인지 확인
+      const contentType = response.headers.get('Content-Type')
       
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: data.response,
-        role: 'assistant',
-        timestamp: new Date()
+      if (contentType?.includes('text/plain')) {
+        // 스트리밍 응답 처리
+        const reader = response.body?.getReader()
+        const decoder = new TextDecoder()
+        let fullResponse = ''
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            const chunk = decoder.decode(value)
+            const lines = chunk.split('\n').filter(line => line.trim().startsWith('data: '))
+
+            for (const line of lines) {
+              try {
+                const data = JSON.parse(line.replace('data: ', ''))
+                
+                if (data.content) {
+                  fullResponse += data.content
+                  // 실시간으로 메시지 업데이트
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === tempAssistantId
+                      ? { ...msg, content: fullResponse }
+                      : msg
+                  ))
+                }
+                
+                if (data.done && data.chatRoomId) {
+                  // 채팅룸 마지막 메시지 업데이트
+                  setChatRooms(prev => prev.map(room => 
+                    room.id === selectedRoom 
+                      ? { ...room, lastMessage: fullResponse, updatedAt: new Date() }
+                      : room
+                  ))
+                  setIsLoading(false)
+                  return
+                }
+                
+                if (data.error) {
+                  throw new Error(data.error)
+                }
+              } catch (parseError) {
+                // JSON 파싱 오류 무시
+              }
+            }
+          }
+        }
+      } else {
+        // 기존 일반 응답 처리 (OpenAI 등)
+        const data = await response.json()
+        
+        setMessages(prev => prev.map(msg =>
+          msg.id === tempAssistantId
+            ? { ...msg, content: data.response }
+            : msg
+        ))
+
+        // Update room's last message
+        setChatRooms(prev => prev.map(room => 
+          room.id === selectedRoom 
+            ? { ...room, lastMessage: data.response, updatedAt: new Date() }
+            : room
+        ))
       }
-
-      setMessages(prev => [...prev, assistantMessage])
-
-      // Update room's last message
-      setChatRooms(prev => prev.map(room => 
-        room.id === selectedRoom 
-          ? { ...room, lastMessage: data.response, updatedAt: new Date() }
-          : room
-      ))
 
     } catch (error) {
       console.error('Error sending message:', error)
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: 'Sorry, there was an error processing your message. Please try again.',
-        role: 'assistant',
-        timestamp: new Date()
-      }
-      setMessages(prev => [...prev, errorMessage])
+      const errorMessage = 'Sorry, there was an error processing your message. Please try again.'
+      
+      setMessages(prev => prev.map(msg =>
+        msg.id === tempAssistantId
+          ? { ...msg, content: errorMessage }
+          : msg
+      ))
     } finally {
       setIsLoading(false)
     }
@@ -247,9 +351,9 @@ export default function ChatPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
-      {/* Sidebar - Chat Rooms */}
-      <div className="w-80 bg-white border-r border-gray-200 flex flex-col">
-        <div className="p-4 border-b border-gray-200">
+      {/* Sidebar - Chat Rooms - Fixed position */}
+      <div className="fixed left-0 top-0 bottom-0 w-80 bg-white border-r border-gray-200 flex flex-col z-40">
+        <div className="p-4 border-b border-gray-200 bg-white">
           <div className="flex items-center justify-between mb-4">
             <Link href="/" className="flex items-center text-gray-600 hover:text-gray-900">
               <ArrowLeft className="w-5 h-5 mr-2" />
@@ -265,6 +369,7 @@ export default function ChatPage() {
           </button>
         </div>
 
+        {/* Chat rooms list with separate scroll */}
         <div className="flex-1 overflow-y-auto">
           {chatRooms.map((room) => (
             <div
@@ -286,12 +391,12 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col">
+      {/* Main Chat Area - Adjusted for fixed sidebar */}
+      <div className="flex-1 flex flex-col ml-80">
         {selectedRoom ? (
           <>
-            {/* Chat Header */}
-            <div className="p-4 bg-white border-b border-gray-200 flex items-center justify-between">
+            {/* Chat Header - Fixed position */}
+            <div className="fixed top-0 right-0 left-80 p-4 bg-white border-b border-gray-200 flex items-center justify-between z-30">
               <h2 className="text-lg font-semibold text-gray-900">
                 {chatRooms.find(room => room.id === selectedRoom)?.name}
               </h2>
@@ -308,8 +413,11 @@ export default function ChatPage() {
               </button>
             </div>
 
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {/* Messages - Adjusted for fixed header */}
+            <div 
+              ref={messagesContainerRef}
+              className="flex-1 overflow-y-auto p-4 space-y-4 mt-20 mb-32"
+            >
               {messages.map((message) => (
                 <div
                   key={message.id}
@@ -333,19 +441,27 @@ export default function ChatPage() {
               ))}
               {isLoading && (
                 <div className="flex justify-start">
-                  <div className="bg-white border border-gray-200 rounded-lg px-4 py-2">
-                    <div className="flex space-x-1">
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                  <div className="bg-white border border-gray-200 rounded-lg px-4 py-2 max-w-[70%]">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <div className="flex space-x-1">
+                        <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"></div>
+                        <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                        <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                      </div>
+                      <span className="text-sm text-gray-600">AI가 응답을 생성하고 있습니다...</span>
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      💡 처음 응답은 모델 로딩으로 인해 시간이 걸릴 수 있습니다
                     </div>
                   </div>
                 </div>
               )}
+              {/* 스크롤 참조점 */}
+              <div ref={messagesEndRef} />
             </div>
 
-            {/* Input Area */}
-            <div className="p-4 bg-white border-t border-gray-200">
+            {/* Input Area - Fixed at bottom */}
+            <div className="fixed bottom-0 right-0 left-80 p-4 bg-white border-t border-gray-200 z-30">
               <div className="flex space-x-4">
                 <textarea
                   value={inputMessage}
@@ -448,6 +564,42 @@ export default function ChatPage() {
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
+                          주 언어 (AI가 답변할 언어)
+                        </label>
+                        <select
+                          value={languageSettings.mainLanguage}
+                          onChange={(e) => setLanguageSettings(prev => ({ ...prev, mainLanguage: e.target.value }))}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        >
+                          <option value="한국어">한국어</option>
+                          <option value="English">English</option>
+                          <option value="日本語">日本語</option>
+                          <option value="中文">中文</option>
+                          <option value="Español">Español</option>
+                          <option value="Français">Français</option>
+                          <option value="Deutsch">Deutsch</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          배울 언어
+                        </label>
+                        <select
+                          value={languageSettings.learningLanguage}
+                          onChange={(e) => setLanguageSettings(prev => ({ ...prev, learningLanguage: e.target.value }))}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        >
+                          <option value="영어">영어 (English)</option>
+                          <option value="일본어">일본어 (日本語)</option>
+                          <option value="중국어">중국어 (中文)</option>
+                          <option value="스페인어">스페인어 (Español)</option>
+                          <option value="프랑스어">프랑스어 (Français)</option>
+                          <option value="독일어">독일어 (Deutsch)</option>
+                          <option value="한국어">한국어 (Korean)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
                           메시지 기록
                         </label>
                         <p className="text-sm text-gray-600">
@@ -537,25 +689,45 @@ export default function ChatPage() {
 
                       {modelSettings.modelType === 'local' && (
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">
-                            사용할 모델
-                          </label>
+                          <div className="flex items-center justify-between mb-2">
+                            <label className="block text-sm font-medium text-gray-700">
+                              사용할 모델
+                            </label>
+                            <button
+                              onClick={loadAvailableModels}
+                              disabled={loadingModels}
+                              className="text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                            >
+                              {loadingModels ? '새로고침 중...' : '새로고침'}
+                            </button>
+                          </div>
                           {loadingModels ? (
                             <div className="text-sm text-gray-500">모델 목록 불러오는 중...</div>
                           ) : availableModels.length > 0 ? (
-                            <select
-                              value={modelSettings.modelId || ''}
-                              onChange={(e) => setModelSettings(prev => ({ ...prev, modelId: e.target.value }))}
-                              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            >
-                              <option value="">모델을 선택하세요</option>
-                              {availableModels.map(model => (
-                                <option key={model} value={model}>{model}</option>
-                              ))}
-                            </select>
+                            <>
+                              <select
+                                value={modelSettings.modelId || ''}
+                                onChange={(e) => setModelSettings(prev => ({ ...prev, modelId: e.target.value }))}
+                                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              >
+                                <option value="">모델을 선택하세요</option>
+                                {availableModels.map(model => (
+                                  <option key={model} value={model}>{model}</option>
+                                ))}
+                              </select>
+                              <p className="text-xs text-gray-500 mt-1">
+                                총 {availableModels.length}개의 모델이 사용 가능합니다.
+                              </p>
+                            </>
                           ) : (
                             <div className="text-sm text-gray-500">
                               사용 가능한 모델이 없습니다. Ollama가 실행 중인지 확인하세요.
+                              <button
+                                onClick={loadAvailableModels}
+                                className="ml-2 text-blue-600 hover:text-blue-800"
+                              >
+                                다시 시도
+                              </button>
                             </div>
                           )}
                         </div>
