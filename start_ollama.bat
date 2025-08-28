@@ -1,9 +1,9 @@
 @echo off
-set OLLAMA_MODELS=F:\language_learning_app\ollama-models
+set OLLAMA_MODELS=F:\Ollama
 echo Starting Ollama with OLLAMA_MODELS=%OLLAMA_MODELS%
 echo.
-echo To download models to project folder, use:
-echo   set OLLAMA_MODELS=F:\language_learning_app\ollama-models
+echo To download models to this folder, use:
+echo   set OLLAMA_MODELS=F:\Ollama
 echo   ollama pull [model_name]
 echo.
 ollama serve

@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { Send, ArrowLeft, Plus, Settings, X, ChevronDown } from 'lucide-react'
 import Link from 'next/link'
+import { AnalysisButtons } from '@/components/chat/AnalysisButtons'
+import { generateAnalysisPrompt } from '@/utils/analysisPrompts'
 
 interface Message {
   id: string
@@ -217,6 +219,134 @@ export default function ChatPage() {
     }])
   }
 
+  const handleAnalysisRequest = async (type: 'grammar' | 'vocabulary' | 'both') => {
+    // 마지막 assistant 메시지 찾기
+    const lastAssistantMessage = [...messages].reverse().find(msg => msg.role === 'assistant')
+    if (!lastAssistantMessage) {
+      console.error('No assistant message found for analysis')
+      return
+    }
+
+    // 분석 프롬프트 생성
+    const analysisPrompt = generateAnalysisPrompt(type, lastAssistantMessage.content, languageSettings)
+    
+    // 분석 요청 메시지 생성
+    const analysisMessage: Message = {
+      id: Date.now().toString(),
+      content: analysisPrompt,
+      role: 'user',
+      timestamp: new Date()
+    }
+
+    setMessages(prev => [...prev, analysisMessage])
+    setIsLoading(true)
+
+    // 임시 assistant 메시지 추가 (스트리밍용)
+    const tempAssistantId = (Date.now() + 1).toString()
+    const tempAssistantMessage: Message = {
+      id: tempAssistantId,
+      content: '',
+      role: 'assistant',
+      timestamp: new Date()
+    }
+    setMessages(prev => [...prev, tempAssistantMessage])
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: analysisMessage.content,
+          history: messages,
+          chatRoomId: selectedRoom,
+          languageSettings
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to send analysis request')
+      }
+
+      // 스트리밍 응답 처리 (기존 sendMessage와 동일)
+      const contentType = response.headers.get('Content-Type')
+      
+      if (contentType?.includes('text/plain')) {
+        const reader = response.body?.getReader()
+        const decoder = new TextDecoder()
+        let fullResponse = ''
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            const chunk = decoder.decode(value)
+            const lines = chunk.split('\n').filter(line => line.trim().startsWith('data: '))
+
+            for (const line of lines) {
+              try {
+                const data = JSON.parse(line.replace('data: ', ''))
+                
+                if (data.content) {
+                  fullResponse += data.content
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === tempAssistantId
+                      ? { ...msg, content: fullResponse }
+                      : msg
+                  ))
+                }
+                
+                if (data.done && data.chatRoomId) {
+                  setChatRooms(prev => prev.map(room => 
+                    room.id === selectedRoom 
+                      ? { ...room, lastMessage: fullResponse, updatedAt: new Date() }
+                      : room
+                  ))
+                  setIsLoading(false)
+                  return
+                }
+                
+                if (data.error) {
+                  throw new Error(data.error)
+                }
+              } catch (parseError) {
+                // JSON 파싱 오류 무시
+              }
+            }
+          }
+        }
+      } else {
+        const data = await response.json()
+        
+        setMessages(prev => prev.map(msg =>
+          msg.id === tempAssistantId
+            ? { ...msg, content: data.response }
+            : msg
+        ))
+
+        setChatRooms(prev => prev.map(room => 
+          room.id === selectedRoom 
+            ? { ...room, lastMessage: data.response, updatedAt: new Date() }
+            : room
+        ))
+      }
+
+    } catch (error) {
+      console.error('Error sending analysis request:', error)
+      const errorMessage = 'Sorry, there was an error processing your analysis request. Please try again.'
+      
+      setMessages(prev => prev.map(msg =>
+        msg.id === tempAssistantId
+          ? { ...msg, content: errorMessage }
+          : msg
+      ))
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   const sendMessage = async () => {
     if (!inputMessage.trim()) return
 
@@ -416,7 +546,7 @@ export default function ChatPage() {
             {/* Messages - Adjusted for fixed header */}
             <div 
               ref={messagesContainerRef}
-              className="flex-1 overflow-y-auto p-4 space-y-4 mt-20 mb-32"
+              className="flex-1 overflow-y-auto p-4 space-y-4 mt-20 mb-48"
             >
               {messages.map((message) => (
                 <div
@@ -462,6 +592,13 @@ export default function ChatPage() {
 
             {/* Input Area - Fixed at bottom */}
             <div className="fixed bottom-0 right-0 left-80 p-4 bg-white border-t border-gray-200 z-30">
+              {/* Analysis Buttons - 입력창 위에 표시 */}
+              <AnalysisButtons
+                onAnalysisRequest={handleAnalysisRequest}
+                lastAssistantMessage={[...messages].reverse().find(msg => msg.role === 'assistant')?.content}
+                disabled={isLoading}
+              />
+              
               <div className="flex space-x-4">
                 <textarea
                   value={inputMessage}

@@ -31,10 +31,11 @@ export async function GET(request: NextRequest) {
       console.log('API: Ollama API not available, checking project folder...')
     }
     
-    // Ollama API에서 모델이 없으면 프로젝트 폴더 직접 스캔
+    // Ollama API에서 모델이 없으면 환경 변수 경로 직접 스캔
     if (ollamaModels.length === 0) {
-      const projectModelsPath = path.join(process.cwd(), 'ollama-models', 'manifests', 'registry.ollama.ai', 'library')
-      console.log('API: Scanning project folder:', projectModelsPath)
+      const ollamaModelsPath = process.env.OLLAMA_MODELS || path.join(process.cwd(), 'ollama-models')
+      const projectModelsPath = path.join(ollamaModelsPath, 'models', 'manifests', 'registry.ollama.ai', 'library')
+      console.log('API: Scanning Ollama folder:', projectModelsPath)
       
       if (fs.existsSync(projectModelsPath)) {
         const modelFolders = fs.readdirSync(projectModelsPath)
