@@ -137,10 +137,13 @@ EMAIL_FROM=your-email@gmail.com
 2. **환경변수 설정**
 ```cmd
 # Ollama 모델 저장 경로를 F 드라이브로 변경 (예시)
-setx OLLAMA_MODELS "F:\ollama\models" /M
+setx OLLAMA_MODELS "F:\Ollama" /M
 
 # 설정 확인
 echo %OLLAMA_MODELS%
+
+# 또는 현재 세션에서만 설정
+set OLLAMA_MODELS=F:\Ollama
 ```
 
 3. **Ollama 서비스 재시작**
