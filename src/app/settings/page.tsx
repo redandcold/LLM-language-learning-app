@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { ArrowLeft, Download, Check, AlertCircle, Settings2, Trash2 } from 'lucide-react'
+import { ArrowLeft, Download, Check, AlertCircle, Settings2, Trash2, Key, Eye, EyeOff } from 'lucide-react'
 import Link from 'next/link'
 import { LanguageModelRecommendation } from '../../components/LanguageModelRecommendation'
 import { ModelPathSettings } from '../../components/ModelPathSettings'
@@ -218,12 +218,50 @@ export default function SettingsPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [modelStatus, setModelStatus] = useState<any>(null)
   const [switchingModel, setSwitchingModel] = useState(false)
+  const [openaiApiKey, setOpenaiApiKey] = useState('')
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [savingApiKey, setSavingApiKey] = useState(false)
 
   useEffect(() => {
     checkOllamaStatus()
     checkInstalledModels()
     checkModelStatus()
+    loadOpenaiApiKey()
   }, [])
+
+  const loadOpenaiApiKey = async () => {
+    try {
+      const response = await fetch('/api/settings/openai')
+      if (response.ok) {
+        const data = await response.json()
+        setOpenaiApiKey(data.apiKey || '')
+      }
+    } catch (error) {
+      console.error('Failed to load OpenAI API key:', error)
+    }
+  }
+
+  const saveOpenaiApiKey = async () => {
+    setSavingApiKey(true)
+    try {
+      const response = await fetch('/api/settings/openai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: openaiApiKey })
+      })
+      
+      if (response.ok) {
+        alert('✅ OpenAI API 키가 저장되었습니다!')
+      } else {
+        throw new Error('Failed to save API key')
+      }
+    } catch (error) {
+      console.error('Failed to save OpenAI API key:', error)
+      alert('❌ API 키 저장에 실패했습니다.')
+    } finally {
+      setSavingApiKey(false)
+    }
+  }
 
   const checkModelStatus = async () => {
     try {
@@ -614,6 +652,64 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
+
+        {/* OpenAI API Key Settings */}
+        <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200 mb-8">
+          <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
+            <Key className="w-5 h-5 mr-2" />
+            OpenAI API 설정
+          </h2>
+          
+          <div className="space-y-4">
+            <p className="text-gray-600 text-sm">
+              ChatGPT를 사용하려면 OpenAI API 키가 필요합니다. 
+              <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" 
+                 className="text-blue-600 hover:text-blue-700 underline ml-1">
+                여기서 발급받을 수 있습니다
+              </a>
+            </p>
+            
+            <div className="flex space-x-2">
+              <div className="flex-1 relative">
+                <input
+                  type={showApiKey ? 'text' : 'password'}
+                  value={openaiApiKey}
+                  onChange={(e) => setOpenaiApiKey(e.target.value)}
+                  placeholder="sk-proj-..."
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 pr-12"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                >
+                  {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <button
+                onClick={saveOpenaiApiKey}
+                disabled={savingApiKey || !openaiApiKey.trim()}
+                className="px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center"
+              >
+                {savingApiKey ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    저장 중...
+                  </>
+                ) : (
+                  '저장'
+                )}
+              </button>
+            </div>
+            
+            {openaiApiKey && (
+              <div className="flex items-center text-green-600 text-sm">
+                <Check className="w-4 h-4 mr-1" />
+                API 키가 설정되었습니다
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Current Model Selection */}
         <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200 mb-8">

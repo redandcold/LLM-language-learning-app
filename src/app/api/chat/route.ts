@@ -96,7 +96,17 @@ export async function POST(request: NextRequest) {
     }
 
     const settings = loadModelSettings()
-    console.log('🔧 현재 모델 설정:', settings)
+    
+    // 사용자의 OpenAI API 키 가져오기
+    if (settings.modelType === 'openai') {
+      const user = await prisma.user.findUnique({
+        where: { id: session.user.id },
+        select: { openaiApiKey: true }
+      })
+      settings.openaiApiKey = user?.openaiApiKey || undefined
+    }
+    
+    console.log('🔧 현재 모델 설정:', { ...settings, openaiApiKey: settings.openaiApiKey ? '***' + settings.openaiApiKey?.slice(-4) : 'none' })
 
     // 채팅룸이 있으면 DB에서 언어 설정을 불러오고, 없으면 요청의 설정을 사용
     let finalLanguageSettings = languageSettings
@@ -116,15 +126,18 @@ export async function POST(request: NextRequest) {
     const systemPrompt = createLanguageLearningPrompt(finalLanguageSettings)
     console.log('🌐 언어 설정:', finalLanguageSettings)
 
-    // 채팅룸이 없으면 생성
+    // 채팅룸 처리
     let currentChatRoom
     if (chatRoomId) {
+      console.log('🔍 채팅룸 ID로 검색:', chatRoomId)
       currentChatRoom = await prisma.chatRoom.findUnique({
         where: { id: chatRoomId, userId: session.user.id }
       })
+      console.log('🎯 찾은 채팅룸:', currentChatRoom ? '존재함' : '없음')
     }
     
     if (!currentChatRoom) {
+      console.log('🆕 새로운 채팅룸 생성')
       currentChatRoom = await prisma.chatRoom.create({
         data: {
           title: message.slice(0, 50) + (message.length > 50 ? '...' : ''),
@@ -133,6 +146,7 @@ export async function POST(request: NextRequest) {
           learningLanguage: languageSettings?.learningLanguage || '영어'
         }
       })
+      console.log('✅ 새로운 채팅룸 생성 완료:', currentChatRoom.id)
     } else if (languageSettings && languageSettings.mainLanguage && languageSettings.learningLanguage) {
       // 기존 채팅룸의 언어 설정 업데이트 (유효한 값만)
       try {
@@ -180,7 +194,10 @@ export async function POST(request: NextRequest) {
         console.log('🔄 모델 관리 시작:', settings.modelId)
         const modelManageResponse = await fetch('http://localhost:3000/api/ollama/manage-model', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Cookie': request.headers.get('cookie') || ''
+          },
           body: JSON.stringify({
             action: 'switch',
             modelId: settings.modelId
@@ -214,22 +231,33 @@ export async function POST(request: NextRequest) {
               const reader = ollamaResponse.body?.getReader()
               if (!reader) throw new Error('No response body')
               
-              while (true) {
+              let streamComplete = false
+              const decoder = new TextDecoder()
+              
+              while (!streamComplete) {
                 const { done, value } = await reader.read()
-                if (done) break
+                if (done) {
+                  console.log('📡 스트림 종료: reader done')
+                  break
+                }
                 
-                const chunk = new TextDecoder().decode(value)
+                const chunk = decoder.decode(value, { stream: true })
                 const lines = chunk.split('\n').filter(line => line.trim())
                 
                 for (const line of lines) {
                   try {
                     const data = JSON.parse(line)
+                    console.log('📦 받은 데이터:', { content: data.message?.content?.substring(0, 50), done: data.done })
+                    
                     if (data.message?.content) {
                       fullResponse += data.message.content
                       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: data.message.content, fullResponse })}\n\n`))
                     }
                     
                     if (data.done) {
+                      console.log('✅ 스트림 완료, 전체 응답 길이:', fullResponse.length)
+                      streamComplete = true
+                      
                       // 완료된 응답을 DB에 저장
                       await prisma.message.create({
                         data: {
@@ -243,10 +271,16 @@ export async function POST(request: NextRequest) {
                       return
                     }
                   } catch (e) {
-                    // JSON 파싱 오류 무시
+                    console.warn('⚠️ JSON 파싱 실패:', line.substring(0, 100))
                   }
                 }
               }
+              // 무한 루프 방지를 위한 안전 장치
+              if (fullResponse.length === 0) {
+                console.log('⚠️ 응답이 없어서 스트림 종료')
+                streamComplete = true
+              }
+              
             } catch (error) {
               console.error('스트리밍 오류:', error)
               let streamErrorMessage = '스트리밍 중 오류가 발생했습니다.'
@@ -319,7 +353,7 @@ export async function POST(request: NextRequest) {
             },
             ...messages
           ],
-          max_tokens: 300, // 토큰 수 줄여서 응답 속도 향상
+          max_tokens: 2000, // 충분한 토큰 수로 증가 (분석 답변 대응)
           temperature: 0.7,
         }),
       })

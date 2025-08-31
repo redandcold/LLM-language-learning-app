@@ -7,6 +7,10 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 export async function GET(request: NextRequest) {
+  console.log('🚀 API ROUTE HIT - MODELS ENDPOINT')
+  console.log('🚀 Current time:', new Date().toISOString())
+  console.log('🚀 Process env OLLAMA_MODELS:', process.env.OLLAMA_MODELS)
+  
   // 인증 확인 (선택사항 - 디버깅을 위해 주석처리)
   // const session = await getServerSession()
   // if (!session) {
@@ -34,19 +38,26 @@ export async function GET(request: NextRequest) {
     // Ollama API에서 모델이 없으면 환경 변수 경로 직접 스캔
     if (ollamaModels.length === 0) {
       const ollamaModelsPath = process.env.OLLAMA_MODELS || path.join(process.cwd(), 'ollama-models')
-      const projectModelsPath = path.join(ollamaModelsPath, 'models', 'manifests', 'registry.ollama.ai', 'library')
+      const projectModelsPath = path.join(ollamaModelsPath, 'manifests', 'registry.ollama.ai', 'library')
+      console.log('API: Environment OLLAMA_MODELS:', process.env.OLLAMA_MODELS)
+      console.log('API: Resolved ollamaModelsPath:', ollamaModelsPath)
       console.log('API: Scanning Ollama folder:', projectModelsPath)
+      console.log('API: Path exists:', fs.existsSync(projectModelsPath))
       
       if (fs.existsSync(projectModelsPath)) {
         const modelFolders = fs.readdirSync(projectModelsPath)
+        console.log('API: Found model folders:', modelFolders)
         const projectModels = []
         
         for (const modelFolder of modelFolders) {
           const modelPath = path.join(projectModelsPath, modelFolder)
+          console.log('API: Checking model folder:', modelFolder, 'at path:', modelPath)
           if (fs.statSync(modelPath).isDirectory()) {
             const variants = fs.readdirSync(modelPath)
+            console.log('API: Found variants for', modelFolder, ':', variants)
             for (const variant of variants) {
               const modelId = `${modelFolder}:${variant}`
+              console.log('API: Adding model:', modelId)
               projectModels.push({
                 name: modelId,
                 model: modelId,
@@ -64,8 +75,11 @@ export async function GET(request: NextRequest) {
           }
         }
         
+        console.log('API: Final projectModels array:', projectModels)
         console.log('API: Found', projectModels.length, 'models in project folder')
         ollamaModels = projectModels
+      } else {
+        console.log('API: Project models path does not exist')
       }
     }
     

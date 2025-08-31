@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Send, ArrowLeft, Plus, Settings, X, ChevronDown } from 'lucide-react'
+import { Send, ArrowLeft, Plus, Settings, X, ChevronDown, FileText } from 'lucide-react'
 import Link from 'next/link'
 import { AnalysisButtons } from '@/components/chat/AnalysisButtons'
 import { generateAnalysisPrompt } from '@/utils/analysisPrompts'
@@ -40,6 +40,7 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [modelSettings, setModelSettings] = useState<ModelSettings>({ modelType: 'openai', updatedAt: '' })
+  const [hasOpenAIKey, setHasOpenAIKey] = useState<boolean>(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [chatSettingsExpanded, setChatSettingsExpanded] = useState(true)
@@ -133,6 +134,13 @@ export default function ChatPage() {
         }
       } else {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      
+      // 메인페이지에서 저장된 OpenAI API 키 확인
+      const openaiResponse = await fetch('/api/settings/openai')
+      if (openaiResponse.ok) {
+        const openaiData = await openaiResponse.json()
+        setHasOpenAIKey(!!openaiData.apiKey)
       }
     } catch (error) {
       console.error('Failed to load model settings:', error)
@@ -299,11 +307,22 @@ export default function ChatPage() {
                 }
                 
                 if (data.done && data.chatRoomId) {
-                  setChatRooms(prev => prev.map(room => 
-                    room.id === selectedRoom 
-                      ? { ...room, lastMessage: fullResponse, updatedAt: new Date() }
-                      : room
-                  ))
+                  // 분석 요청 - 채팅방 ID 처리
+                  if (selectedRoom !== data.chatRoomId) {
+                    console.log('🔄 분석 요청 - 채팅방 ID 업데이트:', selectedRoom, '->', data.chatRoomId)
+                    setSelectedRoom(data.chatRoomId)
+                    setChatRooms(prev => prev.map(room =>
+                      room.id === selectedRoom
+                        ? { ...room, id: data.chatRoomId, lastMessage: fullResponse, updatedAt: new Date() }
+                        : room
+                    ))
+                  } else {
+                    setChatRooms(prev => prev.map(room => 
+                      room.id === selectedRoom 
+                        ? { ...room, lastMessage: fullResponse, updatedAt: new Date() }
+                        : room
+                    ))
+                  }
                   setIsLoading(false)
                   return
                 }
@@ -326,11 +345,22 @@ export default function ChatPage() {
             : msg
         ))
 
-        setChatRooms(prev => prev.map(room => 
-          room.id === selectedRoom 
-            ? { ...room, lastMessage: data.response, updatedAt: new Date() }
-            : room
-        ))
+        // 분석 요청 일반 응답 - 채팅방 ID 처리
+        if (data.chatRoomId && selectedRoom !== data.chatRoomId) {
+          console.log('🔄 분석 일반 응답 - 채팅방 ID 업데이트:', selectedRoom, '->', data.chatRoomId)
+          setSelectedRoom(data.chatRoomId)
+          setChatRooms(prev => prev.map(room =>
+            room.id === selectedRoom
+              ? { ...room, id: data.chatRoomId, lastMessage: data.response, updatedAt: new Date() }
+              : room
+          ))
+        } else {
+          setChatRooms(prev => prev.map(room => 
+            room.id === selectedRoom 
+              ? { ...room, lastMessage: data.response, updatedAt: new Date() }
+              : room
+          ))
+        }
       }
 
     } catch (error) {
@@ -421,12 +451,24 @@ export default function ChatPage() {
                 }
                 
                 if (data.done && data.chatRoomId) {
-                  // 채팅룸 마지막 메시지 업데이트
-                  setChatRooms(prev => prev.map(room => 
-                    room.id === selectedRoom 
-                      ? { ...room, lastMessage: fullResponse, updatedAt: new Date() }
-                      : room
-                  ))
+                  // 새로운 채팅방이 생성된 경우 selectedRoom 업데이트
+                  if (selectedRoom !== data.chatRoomId) {
+                    console.log('🔄 채팅방 ID 업데이트:', selectedRoom, '->', data.chatRoomId)
+                    setSelectedRoom(data.chatRoomId)
+                    // 채팅룸 목록에서도 업데이트
+                    setChatRooms(prev => prev.map(room =>
+                      room.id === selectedRoom
+                        ? { ...room, id: data.chatRoomId, lastMessage: fullResponse, updatedAt: new Date() }
+                        : room
+                    ))
+                  } else {
+                    // 기존 채팅룸 마지막 메시지 업데이트
+                    setChatRooms(prev => prev.map(room => 
+                      room.id === selectedRoom 
+                        ? { ...room, lastMessage: fullResponse, updatedAt: new Date() }
+                        : room
+                    ))
+                  }
                   setIsLoading(false)
                   return
                 }
@@ -450,12 +492,22 @@ export default function ChatPage() {
             : msg
         ))
 
-        // Update room's last message
-        setChatRooms(prev => prev.map(room => 
-          room.id === selectedRoom 
-            ? { ...room, lastMessage: data.response, updatedAt: new Date() }
-            : room
-        ))
+        // 채팅룸 ID 처리 및 마지막 메시지 업데이트
+        if (data.chatRoomId && selectedRoom !== data.chatRoomId) {
+          console.log('🔄 일반 응답 - 채팅방 ID 업데이트:', selectedRoom, '->', data.chatRoomId)
+          setSelectedRoom(data.chatRoomId)
+          setChatRooms(prev => prev.map(room =>
+            room.id === selectedRoom
+              ? { ...room, id: data.chatRoomId, lastMessage: data.response, updatedAt: new Date() }
+              : room
+          ))
+        } else {
+          setChatRooms(prev => prev.map(room => 
+            room.id === selectedRoom 
+              ? { ...room, lastMessage: data.response, updatedAt: new Date() }
+              : room
+          ))
+        }
       }
 
     } catch (error) {
@@ -476,6 +528,28 @@ export default function ChatPage() {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       sendMessage()
+    }
+  }
+
+  const saveToMemo = async (content: string) => {
+    try {
+      // 내용을 요약해서 제목 생성 (첫 50자 + "..." 또는 첫 줄)
+      const title = content.split('\n')[0].substring(0, 50) + (content.length > 50 ? '...' : '')
+      
+      const response = await fetch('/api/notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, content })
+      })
+
+      if (response.ok) {
+        alert('메모장에 저장되었습니다!')
+      } else {
+        throw new Error('메모 저장에 실패했습니다')
+      }
+    } catch (error) {
+      console.error('Failed to save to memo:', error)
+      alert('메모 저장에 실패했습니다')
     }
   }
 
@@ -553,19 +627,35 @@ export default function ChatPage() {
                   key={message.id}
                   className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
-                  <div
-                    className={`max-w-[70%] rounded-lg px-4 py-2 ${
-                      message.role === 'user'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-white border border-gray-200 text-gray-900'
-                    }`}
-                  >
-                    <p className="whitespace-pre-wrap">{message.content}</p>
-                    <p className={`text-xs mt-1 ${
-                      message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
-                    }`}>
-                      {message.timestamp.toLocaleTimeString()}
-                    </p>
+                  <div className={`max-w-[70%] ${message.role === 'assistant' ? 'space-y-2' : ''}`}>
+                    <div
+                      className={`rounded-lg px-4 py-2 ${
+                        message.role === 'user'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-white border border-gray-200 text-gray-900'
+                      }`}
+                    >
+                      <p className="whitespace-pre-wrap">{message.content}</p>
+                      <p className={`text-xs mt-1 ${
+                        message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
+                      }`}>
+                        {message.timestamp.toLocaleTimeString()}
+                      </p>
+                    </div>
+                    
+                    {/* 메모장에 옮기기 버튼 - AI 응답에만 표시 */}
+                    {message.role === 'assistant' && message.content.trim() && !isLoading && (
+                      <div className="flex justify-start">
+                        <button
+                          onClick={() => saveToMemo(message.content)}
+                          className="flex items-center px-3 py-1.5 text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                          title="메모장에 저장"
+                        >
+                          <FileText className="w-3 h-3 mr-1" />
+                          메모장에 옮기기
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -808,19 +898,28 @@ export default function ChatPage() {
 
                       {modelSettings.modelType === 'openai' && (
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">
-                            OpenAI API 키
-                          </label>
-                          <input
-                            type="password"
-                            placeholder="sk-..."
-                            value={modelSettings.openaiApiKey || ''}
-                            onChange={(e) => setModelSettings(prev => ({ ...prev, openaiApiKey: e.target.value }))}
-                            className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          />
-                          <p className="text-xs text-gray-500 mt-1">
-                            🔒 API 키는 암호화되어 안전하게 저장됩니다
-                          </p>
+                          {hasOpenAIKey ? (
+                            <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                              <div className="flex items-center">
+                                <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
+                                <p className="text-sm text-green-700">
+                                  ✅ OpenAI API 키가 메인페이지 설정에서 이미 저장되었습니다
+                                </p>
+                              </div>
+                              <p className="text-xs text-green-600 mt-1">
+                                바로 ChatGPT를 사용할 수 있습니다
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                              <p className="text-sm text-yellow-700 mb-2">
+                                ⚠️ OpenAI API 키가 설정되지 않았습니다
+                              </p>
+                              <p className="text-xs text-yellow-600">
+                                메인페이지의 설정에서 OpenAI API 키를 먼저 설정해주세요
+                              </p>
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -888,7 +987,7 @@ export default function ChatPage() {
                   onClick={() => saveModelSettings()}
                   disabled={
                     (modelSettings.modelType === 'local' && !modelSettings.modelId) ||
-                    (modelSettings.modelType === 'openai' && !modelSettings.openaiApiKey)
+                    (modelSettings.modelType === 'openai' && !hasOpenAIKey)
                   }
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >

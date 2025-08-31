@@ -21,11 +21,11 @@
 
 ```bash
 # Windows CMD
-set OLLAMA_MODELS=F:\language_learning_app\ollama-models
+set OLLAMA_MODELS=your_path\models
 ollama pull qwen2.5:0.5b
 
 # Windows PowerShell
-$env:OLLAMA_MODELS="F:\language_learning_app\ollama-models"
+$env:OLLAMA_MODELS="your_path\models"
 ollama pull qwen2.5:0.5b
 ```
 
@@ -36,7 +36,7 @@ ollama pull qwen2.5:0.5b
 ## 모델 디렉토리 구조
 
 ```
-F:\language_learning_app\ollama-models\
+your_path\models\
 ├── blobs\          # 모델 파일들
 ├── manifests\      # 모델 메타데이터
 └── ...
@@ -45,5 +45,6 @@ F:\language_learning_app\ollama-models\
 ## 주의사항
 
 - 모델 다운로드 시 항상 `OLLAMA_MODELS` 환경 변수가 설정되어 있는지 확인하세요
-- 웹 애플리케이션에서 모델 다운로드 시 자동으로 프로젝트 폴더에 저장됩니다
-- C 드라이브 용량 절약을 위해 모든 모델은 프로젝트 폴더에만 저장됩니다
+- start_ollama.bat 파일에서 `your_path`를 실제 모델 저장 경로로 수정하세요
+- 웹 애플리케이션에서 모델 다운로드 시 자동으로 설정된 폴더에 저장됩니다
+- 용량 절약을 위해 원하는 위치에 모델을 저장할 수 있습니다

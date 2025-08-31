@@ -38,7 +38,11 @@ next-env.d.ts
 
 # prisma
 /prisma/migrations
+/prisma/dev.db
 
 # local models
 /models
 /ollama-models
+
+# sensitive data
+data/model-settings.json

@@ -46,6 +46,7 @@ model User {
   email         String    @unique
   emailVerified DateTime?
   image         String?
+  openaiApiKey  String?   // OpenAI API key for ChatGPT
   accounts      Account[]
   sessions      Session[]
   chatRooms     ChatRoom[]
